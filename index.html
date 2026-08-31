@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>水泳タイマー (ラップ一括計測)</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { padding: 15px; background-color: #f4f7f6; margin: 0; }
+    h1 { text-align: center; color: #0288d1; font-size: 1.4rem; margin-bottom: 15px; }
+    .card { background: white; border-radius: 10px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .form-group { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    label { font-weight: bold; color: #333; font-size: 0.9rem; }
+    input, select { width: 45%; padding: 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 1rem; text-align: center; }
+    
+    .btn-main { width: 100%; padding: 12px; font-size: 1.1rem; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; color: white; margin-top: 5px; }
+    .btn-start { background-color: #4caf50; }
+    .btn-reset { background-color: #f44336; }
+    .btn-lap { background-color: #ff9800; padding: 20px; font-size: 1.5rem; margin-top: 15px; }
+    .btn-lap:disabled { background-color: #ccc; cursor: not-allowed; }
+    .btn-csv { background-color: #0288d1; margin-top: 10px; }
+    .btn-csv:disabled { background-color: #ccc; cursor: not-allowed; }
+    
+    .timer-display { text-align: center; font-size: 2.5rem; font-weight: bold; color: #333; margin: 10px 0; font-family: monospace; }
+    .status-panel { display: flex; justify-content: space-between; font-size: 0.95rem; font-weight: bold; color: #0288d1; background: #e1f5fe; padding: 10px 15px; border-radius: 6px; margin-bottom: 10px; }
+
+    .table-container { overflow-x: auto; margin-top: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: center; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background-color: #0288d1; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+  </style>
+</head>
+<body>
+
+  <h1>水泳タイマー (ラップ一括計測)</h1>
+
+  <!-- 設定パネル -->
+  <div class="card" id="config-panel">
+    <div class="form-group">
+      <label>1組の人数 (レーン数)</label>
+      <input type="number" id="group-size" value="4" min="1" max="10">
+    </div>
+    <div class="form-group">
+      <label>総人数 (全選手数)</label>
+      <input type="number" id="total-swimmers" value="10" min="1" max="100">
+    </div>
+    <div class="form-group">
+      <label>組ごとのスタート間隔</label>
+      <select id="interval">
+        <option value="3">3秒</option>
+        <option value="5" selected>5秒</option>
+        <option value="10">10秒</option>
+        <option value="15">15秒</option>
+        <option value="20">20秒</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>サイクル時間（秒）</label>
+      <input type="number" id="cycle" value="60" min="10" step="5">
+    </div>
+    <button class="btn-main btn-start" id="start-btn" onclick="toggleTimer()">スタート</button>
+  </div>
+
+  <!-- タイマー表示 -->
+  <div class="timer-display" id="timer">00:00.0</div>
+
+  <!-- 計測操作エリア -->
+  <div class="card">
+    <div class="status-panel">
+      <span>現在の本数: <span id="current-cycle-display">1本目</span></span>
+      <span>次に帰ってくる予想: <span id="next-swimmer-display">1組目</span></span>
+    </div>
+    <button class="btn-main btn-lap" id="lap-btn" onclick="recordLap()" disabled>ラップ（タッチ）</button>
+  </div>
+
+  <!-- 記録表示 & CSV出力エリア -->
+  <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <label style="font-size: 1.1rem; font-weight: bold;">計測記録一覧</label>
+      <button class="btn-main btn-csv" id="csv-btn" style="width: auto; padding: 6px 15px; font-size: 0.9rem;" onclick="downloadCSV()" disabled>CSV出力</button>
+    </div>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>No.</th>
+            <th>本数</th>
+            <th>組</th>
+            <th>着順</th>
+            <th>計算タイム</th>
+            <th>実計測時間 (実ラップ)</th>
+          </tr>
+        </thead>
+        <tbody id="records-table-body">
+          <tr>
+            <td colspan="6" style="color: #888;">まだ記録はありません</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  let timerInterval = null;
+  let startTime = 0;
+  let isRunning = false;
+  let records = [];
+  let totalLapCount = 0;
+
+  function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${ms}`;
+  }
+
+  function toggleTimer() {
+    const startBtn = document.getElementById('start-btn');
+    const lapBtn = document.getElementById('lap-btn');
+    
+    if (!isRunning) {
+      isRunning = true;
+      startTime = Date.now();
+      records = [];
+      totalLapCount = 0;
+      updateTable();
+      updateStatus();
+      
+      startBtn.textContent = 'リセット';
+      startBtn.className = 'btn-main btn-reset';
+      lapBtn.disabled = false;
+      disableInputs(true);
+      document.getElementById('csv-btn').disabled = true;
+
+      timerInterval = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        document.getElementById('timer').textContent = formatTime(elapsed);
+      }, 100);
+    } else {
+      isRunning = false;
+      clearInterval(timerInterval);
+      document.getElementById('timer').textContent = '00:00.0';
+      startBtn.textContent = 'スタート';
+      startBtn.className = 'btn-main btn-start';
+      lapBtn.disabled = true;
+      disableInputs(false);
+      
+      if (records.length > 0) {
+        document.getElementById('csv-btn').disabled = false;
+      }
+      document.getElementById('current-cycle-display').textContent = '1本目';
+      document.getElementById('next-swimmer-display').textContent = '1組目';
+    }
+  }
+
+  function disableInputs(disabled) {
+    document.getElementById('group-size').disabled = disabled;
+    document.getElementById('total-swimmers').disabled = disabled;
+    document.getElementById('interval').disabled = disabled;
+    document.getElementById('cycle').disabled = disabled;
+  }
+
+  function updateStatus() {
+    const groupSize = parseInt(document.getElementById('group-size').value);
+    const totalSwimmers = parseInt(document.getElementById('total-swimmers').value);
+    
+    const currentCycleNumber = Math.floor(totalLapCount / totalSwimmers) + 1;
+    const indexInCycle = totalLapCount % totalSwimmers;
+    const currentGroupNumber = Math.floor(indexInCycle / groupSize) + 1;
+
+    document.getElementById('current-cycle-display').textContent = `${currentCycleNumber}本目`;
+    document.getElementById('next-swimmer-display').textContent = `${currentGroupNumber}組目`;
+  }
+
+  function recordLap() {
+    if (!isRunning) return;
+
+    const currentTime = (Date.now() - startTime) / 1000;
+    
+    const groupSize = parseInt(document.getElementById('group-size').value);
+    const totalSwimmers = parseInt(document.getElementById('total-swimmers').value);
+    const interval = parseInt(document.getElementById('interval').value);
+    const cycle = parseInt(document.getElementById('cycle').value);
+
+    // どのサイクル（何本目か）: 0始まり
+    const cycleIdx = Math.floor(totalLapCount / totalSwimmers);
+    // そのサイクル内で何番目に帰ってきたか: 0始まり
+    const indexInCycle = totalLapCount % totalSwimmers;
+    
+    // 組番号: 0始まり
+    const groupIdx = Math.floor(indexInCycle / groupSize);
+    // 組内での着順: 1始まり
+    const rankInGroup = (indexInCycle % groupSize) + 1;
+
+    // スタートハンデ計算 (サイクル遅れ + 組遅れ)
+    const startOffset = (cycleIdx * cycle) + (groupIdx * interval);
+
+    // 計算後の泳ぎタイム
+    let netTime = currentTime - startOffset;
+    if (netTime < 0) netTime = 0;
+
+    const recordObj = {
+      id: totalLapCount + 1,
+      cycleNum: `${cycleIdx + 1}本目`,
+      groupNum: `${groupIdx + 1}組目`,
+      rank: `${rankInGroup}着`,
+      netTime: formatTime(netTime),
+      totalTime: formatTime(currentTime)
+    };
+
+    records.push(recordObj);
+    totalLapCount++;
+
+    updateTable();
+    updateStatus();
+    document.getElementById('csv-btn').disabled = false;
+  }
+
+  function updateTable() {
+    const tbody = document.getElementById('records-table-body');
+    if (records.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color: #888;">まだ記録はありません</td></tr>';
+      return;
+    }
+
+    let html = '';
+    for (let i = records.length - 1; i >= 0; i--) {
+      const r = records[i];
+      html += `
+        <tr>
+          <td>${r.id}</td>
+          <td><b>${r.cycleNum}</b></td>
+          <td>${r.groupNum}</td>
+          <td>${r.rank}</td>
+          <td style="font-weight:bold; color:#d32f2f; font-size:1rem;">${r.netTime}</td>
+          <td>${r.totalTime}</td>
+        </tr>
+      `;
+    }
+    tbody.innerHTML = html;
+  }
+
+  function downloadCSV() {
+    if (records.length === 0) return;
+
+    let csvContent = "\uFEFF番号,本数,組,組内着順,計算タイム,実計測時間\n";
+
+    records.forEach(r => {
+      csvContent += `"${r.id}","${r.cycleNum}","${r.groupNum}","${r.rank}","${r.netTime}","${r.totalTime}"\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    
+    const today = new Date().toISOString().split('T')[0];
+    a.download = `swim_records_${today}.csv`;
+    
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+</script>
+</body>
+</html>
