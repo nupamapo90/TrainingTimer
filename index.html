@@ -245,14 +245,15 @@
   function downloadCSV() {
     if (records.length === 0) return;
 
-    let csvContent = "\uFEFF番号,本数,組,組内着順,計算タイム,実計測時間\n";
+    // BOMなしUTF-8文字列として構築
+    let csvContent = "番号,本数,組,組内着順,計算タイム,実計測時間\n";
 
     records.forEach(r => {
       csvContent += `"${r.id}","${r.cycleNum}","${r.groupNum}","${r.rank}","${r.netTime}","${r.totalTime}"\n`;
     });
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+    const url = URL.URL ? URL.createObjectURL(blob) : window.webkitURL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     
